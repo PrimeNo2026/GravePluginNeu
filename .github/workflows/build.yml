@@ -1,0 +1,67 @@
+name: Build und Release
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository holen
+        uses: actions/checkout@v4
+
+      - name: Projekt vorbereiten (entpackt die ZIP automatisch)
+        id: prep
+        run: |
+          if [ -f pom.xml ]; then
+            DIR="."
+          else
+            ZIP=$(find . -maxdepth 1 -iname '*.zip' | head -n 1)
+            if [ -z "$ZIP" ]; then
+              echo "Weder pom.xml noch eine ZIP-Datei im Repository gefunden."
+              exit 1
+            fi
+            echo "Entpacke $ZIP"
+            mkdir -p _unzipped
+            unzip -q -o "$ZIP" -d _unzipped
+            POM=$(find _unzipped -name pom.xml -not -path '*/__MACOSX/*' | head -n 1)
+            if [ -z "$POM" ]; then
+              echo "Keine pom.xml in der ZIP gefunden."
+              exit 1
+            fi
+            DIR=$(dirname "$POM")
+          fi
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Java 25 einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Plugin bauen
+        working-directory: ${{ steps.prep.outputs.dir }}
+        run: mvn -B -ntp clean package
+
+      - name: Jar suchen
+        id: jar
+        run: |
+          JAR=$(find "${{ steps.prep.outputs.dir }}/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' | head -n 1)
+          if [ -z "$JAR" ]; then
+            echo "Keine Jar-Datei gefunden."
+            exit 1
+          fi
+          echo "path=$JAR" >> "$GITHUB_OUTPUT"
+
+      - name: Release erstellen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v1.0.${{ github.run_number }}" "${{ steps.jar.outputs.path }}" \
+            --title "Grave 1.0.${{ github.run_number }}" \
+            --notes "Automatisch gebaut. Paper 26.3, Java 25. Die .jar unten bei Assets herunterladen und in den plugins-Ordner legen." \
+            --target "${{ github.sha }}"
